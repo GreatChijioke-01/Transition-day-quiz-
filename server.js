@@ -83,39 +83,32 @@ io.on('connection', (socket) => {
     });
 
     // 4. Player submits an answer
-   socket.on('next-question', (pin) => {
-    let game = activeGames[pin];
-    if (game) {
-        if (game.currentQuestionIndex < stemQuestions.length) {
+   // 4. Player submits an answer
+    socket.on('submit-answer', ({ pin, answerIndex }) => {
+        let game = activeGames[pin];
+        if (game) {
             let questionData = stemQuestions[game.currentQuestionIndex];
+            let player = game.players.find(p => p.id === socket.id);
             
-            io.to(game.hostId).emit('display-question-host', {
-                q: questionData.q,
-                options: questionData.options,
-                currentNum: game.currentQuestionIndex + 1,
-                totalNum: stemQuestions.length
-            });
+            if (player) {
+                // Force both values to be Numbers to eliminate type mismatches
+                let chosen = Number(answerIndex);
+                let correct = Number(questionData.correct);
 
-            io.to(pin).emit('display-question-player', {
-                totalOptions: questionData.options.length
-            });
-        } else {
-            // GAME OVER: Sort players by score and slice the top 3 for the podium
-            let finalStandings = [...game.players].sort((a, b) => b.score - a.score);
-            let podium = {
-                first: finalStandings[0] || { nickname: "Empty", score: 0 },
-                second: finalStandings[1] || null,
-                third: finalStandings[2] || null
-            };
+                console.log(`[DEBUG] Player ${player.nickname} chose: ${chosen}, Correct answer is: ${correct}`);
+
+                if (chosen === correct) {
+                    player.score += 1000;
+                    console.log(`[DEBUG] Correct! ${player.nickname}'s new score: ${player.score}`);
+                } else {
+                    console.log(`[DEBUG] Incorrect answer chosen.`);
+                }
+            }
             
-            io.to(game.hostId).emit('game-over-podium', podium);
-            io.to(pin).emit('game-over');
-            
-            // Clean up memory
-            delete activeGames[pin];
+            // Tell host someone answered
+            io.to(game.hostId).emit('player-answered', player ? player.nickname : "Someone");
         }
-    }
-});
+    });
 
     // 5. Host ends the current question timer
     socket.on('end-question', (pin) => {
