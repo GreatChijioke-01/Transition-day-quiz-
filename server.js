@@ -12,7 +12,19 @@ let activeGames = {};
 const stemQuestions = [
     { q: "Solve for x: $2x + 5 = 15$", options: ["x = 5", "x = 10", "x = 7", "x = 3"], correct: 0 },
     { q: "Which programming language uses indentation to define code blocks?", options: ["Java", "Python", "C++", "JavaScript"], correct: 1 },
-    { q: "What is the molecular formula for Glucose?", options: ["H2O", "CO2", "C6H12O6", "NaCl"], correct: 2 }
+    { q: "What is the molecular formula for Glucose?", options: ["H2O", "CO2", "C6H12O6", "NaCl"], correct: 2 },
+    { q: "What is the acceleration due to gravity on Earth ($g$)?", options: ["9.81 m/s²", "3.14 m/s²", "12.5 m/s²", "1.62 m/s²"], correct: 0 },
+    { q: "In binary, what number does the byte `00001010` represent?", options: ["5", "10", "12", "8"], correct: 1 },
+    { q: "What is the derivative of $f(x) = 3x^2 + 5x$ with respect to $x$?", options: ["$6x + 5$", "$3x + 5$", "$6x^2$", "$5x + 3$"], correct: 0 },
+    { q: "Which data structure operates on a 'First In, First Out' (FIFO) basis?", options: ["Stack", "Array", "Queue", "Binary Tree"], correct: 2 },
+    { q: "What subatomic particle carries a negative electric charge?", options: ["Proton", "Neutron", "Electron", "Quark"], correct: 2 },
+    { q: "What does the following Python expression evaluate to: `11 // 3`?", options: ["3.666...", "3", "2", "4"], correct: 1 },
+    { q: "What type of chemical bond involves the sharing of electron pairs between atoms?", options: ["Ionic bond", "Covalent bond", "Hydrogen bond", "Metallic bond"], correct: 1 },
+    { q: "If a wave has a frequency of 10 Hz and a wavelength of 3 meters, what is its speed?", options: ["30 m/s", "3.33 m/s", "13 m/s", "0.33 m/s"], correct: 0 },
+    { q: "Which of the following sorting algorithms has the best worst-case time complexity?", options: ["Bubble Sort", "Insertion Sort", "Merge Sort", "Selection Sort"], correct: 2 },
+    { q: "What is the primary gas that makes up the majority of Earth's atmosphere?", options: ["Oxygen", "Carbon Dioxide", "Nitrogen", "Argon"], correct: 2 },
+    { q: "Find the value of $\\log_2(64)$.", options: ["6", "8", "32", "12"], correct: 0 },
+    { q: "What law of physics states that for every action, there is an equal and opposite reaction?", options: ["Newton's 1st Law", "Newton's 2nd Law", "Newton's 3rd Law", "Law of Gravitation"], correct: 2 }
 ];
 
 io.on('connection', (socket) => {
@@ -71,20 +83,39 @@ io.on('connection', (socket) => {
     });
 
     // 4. Player submits an answer
-    socket.on('submit-answer', ({ pin, answerIndex }) => {
-        let game = activeGames[pin];
-        if (game) {
+   socket.on('next-question', (pin) => {
+    let game = activeGames[pin];
+    if (game) {
+        if (game.currentQuestionIndex < stemQuestions.length) {
             let questionData = stemQuestions[game.currentQuestionIndex];
-            let player = game.players.find(p => p.id === socket.id);
             
-            if (player && parseInt(answerIndex) === questionData.correct) {
-                player.score += 1000; // Flat points for prototype simplicity
-            }
+            io.to(game.hostId).emit('display-question-host', {
+                q: questionData.q,
+                options: questionData.options,
+                currentNum: game.currentQuestionIndex + 1,
+                totalNum: stemQuestions.length
+            });
+
+            io.to(pin).emit('display-question-player', {
+                totalOptions: questionData.options.length
+            });
+        } else {
+            // GAME OVER: Sort players by score and slice the top 3 for the podium
+            let finalStandings = [...game.players].sort((a, b) => b.score - a.score);
+            let podium = {
+                first: finalStandings[0] || { nickname: "Empty", score: 0 },
+                second: finalStandings[1] || null,
+                third: finalStandings[2] || null
+            };
             
-            // Tell host someone answered
-            io.to(game.hostId).emit('player-answered', player ? player.nickname : "Someone");
+            io.to(game.hostId).emit('game-over-podium', podium);
+            io.to(pin).emit('game-over');
+            
+            // Clean up memory
+            delete activeGames[pin];
         }
-    });
+    }
+});
 
     // 5. Host ends the current question timer
     socket.on('end-question', (pin) => {
