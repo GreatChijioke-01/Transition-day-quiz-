@@ -72,6 +72,12 @@
             document.getElementById('game-pads').style.display = "none";
             document.getElementById('wait-screen').innerHTML = "🏁 Game Over! Check the main screen for podium placements.";
         });
+
+        socket.on('game-ended', (message) => {
+            document.getElementById('game-pads').style.display = "none";
+            document.getElementById('wait-screen').innerHTML = message || "The game has ended.";
+            document.getElementById('wait-screen').style.display = "block";
+        });
     </script>
 </body>
 </html>

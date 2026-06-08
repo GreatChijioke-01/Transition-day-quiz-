@@ -6,9 +6,17 @@ const io = require('socket.io')(http);
 app.use(express.static('public'));
 
 // In-memory database to hold active games
-let activeGames = {}; 
+let activeGames = {};
 
-// Sample STEM Questions (With LaTeX syntax for math math rendering later!)
+function generateUniquePin() {
+    let pin;
+    do {
+        pin = Math.floor(100000 + Math.random() * 900000).toString();
+    } while (activeGames[pin]);
+    return pin;
+}
+
+// Sample STEM Questions (With LaTeX syntax for math rendering later)
 const stemQuestions = [
     { q: "Solve for x: $2x + 5 = 15$", options: ["x = 5", "x = 10", "x = 7", "x = 3"], correct: 0 },
     { q: "Which programming language uses indentation to define code blocks?", options: ["Java", "Python", "C++", "JavaScript"], correct: 1 },
@@ -32,7 +40,7 @@ io.on('connection', (socket) => {
 
     // 1. Host creates a game
     socket.on('create-game', () => {
-        let pin = Math.floor(100000 + Math.random() * 900000).toString(); // Generate 6-digit PIN
+        const pin = generateUniquePin();
         activeGames[pin] = {
             hostId: socket.id,
             players: [],
@@ -44,46 +52,67 @@ io.on('connection', (socket) => {
 
     // 2. Player tries to join with a PIN
     socket.on('join-game', ({ pin, nickname }) => {
-        if (activeGames[pin]) {
-            let playerIndex = activeGames[pin].players.push({
-                id: socket.id,
-                nickname: nickname,
-                score: 0
-            }) - 1;
-            
-            socket.join(pin);
-            socket.emit('join-success');
-            
-            // Notify the host that a player joined
-            io.to(activeGames[pin].hostId).emit('update-player-list', activeGames[pin].players);
-        } else {
-            socket.emit('join-failure', 'Game PIN not found!');
+        if (!pin || !nickname || nickname.trim().length === 0) {
+            socket.emit('join-failure', 'Please enter a valid PIN and nickname.');
+            return;
         }
+
+        const game = activeGames[pin];
+        if (!game) {
+            socket.emit('join-failure', 'Game PIN not found.');
+            return;
+        }
+
+        if (game.currentQuestionIndex >= stemQuestions.length) {
+            socket.emit('join-failure', 'This game has already finished.');
+            return;
+        }
+
+        game.players.push({
+            id: socket.id,
+            nickname: nickname.trim(),
+            score: 0
+        });
+
+        socket.join(pin);
+        socket.emit('join-success');
+        io.to(game.hostId).emit('update-player-list', game.players);
     });
 
     // 3. Host starts the game / moves to next question
     socket.on('next-question', (pin) => {
-        let game = activeGames[pin];
-        if (game && game.currentQuestionIndex < stemQuestions.length) {
-            let questionData = stemQuestions[game.currentQuestionIndex];
-            
-            // Send full question details to Host
-            io.to(game.hostId).emit('display-question-host', {
-                q: questionData.q,
-                options: questionData.options
-            });
+        const game = activeGames[pin];
+        if (game) {
+            if (game.currentQuestionIndex < stemQuestions.length) {
+                const questionData = stemQuestions[game.currentQuestionIndex];
+                
+                io.to(game.hostId).emit('display-question-host', {
+                    q: questionData.q,
+                    options: questionData.options,
+                    index: game.currentQuestionIndex + 1,
+                    total: stemQuestions.length
+                });
 
-            // Send ONLY buttons config to players (just like Kahoot!)
-            io.to(pin).emit('display-question-player', {
-                totalOptions: questionData.options.length
-            });
-        } else {
-            io.to(pin).emit('game-over', game.players.sort((a,b) => b.score - a.score));
+                io.to(pin).emit('display-question-player', {
+                    totalOptions: questionData.options.length
+                });
+            } else {
+                const finalStandings = [...game.players].sort((a, b) => b.score - a.score);
+                
+                const podiumData = {
+                    first: finalStandings[0] || { nickname: 'N/A', score: 0 },
+                    second: finalStandings[1] || null,
+                    third: finalStandings[2] || null
+                };
+
+                io.to(game.hostId).emit('game-over-podium', podiumData);
+                io.to(pin).emit('game-over');
+                delete activeGames[pin];
+            }
         }
     });
 
     // 4. Player submits an answer
-   // 4. Player submits an answer
     socket.on('submit-answer', ({ pin, answerIndex }) => {
         let game = activeGames[pin];
         if (game) {
@@ -112,21 +141,39 @@ io.on('connection', (socket) => {
 
     // 5. Host ends the current question timer
     socket.on('end-question', (pin) => {
-        let game = activeGames[pin];
-        if (game) {
-            let questionData = stemQuestions[game.currentQuestionIndex];
-            // Show scoreboard on host
-            io.to(game.hostId).emit('show-results', {
-                correctIndex: questionData.correct,
-                leaderboard: game.players
-            });
-            // Prepare for next round
-            game.currentQuestionIndex++;
+        const game = activeGames[pin];
+        if (!game) {
+            return;
         }
+
+        const questionData = stemQuestions[game.currentQuestionIndex];
+        io.to(game.hostId).emit('show-results', {
+            correctIndex: questionData.correct,
+            leaderboard: [...game.players].sort((a, b) => b.score - a.score)
+        });
+
+        game.currentQuestionIndex += 1;
     });
 
     socket.on('disconnect', () => {
         console.log('User disconnected: ' + socket.id);
+
+        for (const pin in activeGames) {
+            const game = activeGames[pin];
+
+            if (game.hostId === socket.id) {
+                io.to(pin).emit('game-ended', 'Host disconnected.');
+                delete activeGames[pin];
+                break;
+            }
+
+            const playerIndex = game.players.findIndex((player) => player.id === socket.id);
+            if (playerIndex !== -1) {
+                game.players.splice(playerIndex, 1);
+                io.to(game.hostId).emit('update-player-list', game.players);
+                break;
+            }
+        }
     });
 });
 
